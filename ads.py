@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential
 import logging
+import datetime # Import datetime for date inputs
 
 # --- Setup Logging ---
 logging.basicConfig(filename="app.log", level=logging.INFO,
@@ -14,8 +15,9 @@ logging.basicConfig(filename="app.log", level=logging.INFO,
 # --- Load Environment Variables ---
 load_dotenv()
 
-# Directly set the API_KEY as it's not meant to be secret based on the prompt.
-# In a production environment, this should still be handled securely (e.g., Streamlit secrets, environment variable).
+# Directly set the API_KEY as per your request.
+# WARNING: In a production environment, DO NOT hardcode API keys.
+# Use Streamlit's secrets management (st.secrets) or environment variables.
 API_KEY = "AIzaSyA-9-lTQTWdNM43YdOXMQwGKDy0SrMwo6c" 
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
@@ -34,7 +36,9 @@ def initialize_session_state():
         "type_filter": "All",
         "ad_format": "Text-Based",
         "ai_model": "Gemini 1.5 Flash",
-        "page": 1
+        "page": 1,
+        "booking_confirmed_this_session": False, # Track if a booking was confirmed
+        "submitted_booking_form_once": False # Helper to track form submission
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -44,6 +48,7 @@ initialize_session_state()
 
 # --- Load CSS ---
 def load_css():
+    # Removed 'f' from the start of this triple-quoted string
     css = """
     body {
         font-family: 'Inter', sans-serif;
@@ -286,11 +291,10 @@ def paginate_hotels(filtered_hotels, page_size=2):
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
     total_pages = (len(filtered_hotels) + page_size - 1) // page_size
-    if page > total_pages and total_pages > 0: # Ensure total_pages is not 0 to avoid setting page to 0
+    if total_pages == 0:
+        total_pages = 1 # At least one page even if empty
+    if page > total_pages:
         page = total_pages
-        st.session_state.page = page
-    elif total_pages == 0: # If there are no hotels, page should be 1, or handle as empty
-        page = 1
         st.session_state.page = page
     return filtered_hotels.iloc[start_idx:end_idx], page, total_pages
 
@@ -310,6 +314,7 @@ def render_hotel_card(hotel):
     st.button(f"Book {hotel['name']} Now", key=f"book_direct_{hotel['id']}", 
               on_click=handle_direct_book, args=(hotel['id'],), help="Click to book this hotel directly.")
     
+    # Check if this specific hotel is the one for the sponsored ad
     if hotel["name"] == "Château Romance & Spa":
         st.markdown(f"""
             <div class="sponsored-ad" data-ad-type="sponsored" data-hotel-id="{hotel['id']}">
@@ -360,6 +365,7 @@ def handle_banner_click():
         st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
+    st.session_state.booking_confirmed_this_session = False # Reset booking status
     st.toast("Banner Ad Clicked and Hotel Selected!")
     logging.info("Banner ad clicked")
 
@@ -376,6 +382,7 @@ def handle_sponsored_click(hotel_id):
         st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
+    st.session_state.booking_confirmed_this_session = False # Reset booking status
 
 def handle_direct_book(hotel_id):
     """Handles direct booking click on a hotel listing."""
@@ -389,12 +396,15 @@ def handle_direct_book(hotel_id):
         st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
+    st.session_state.booking_confirmed_this_session = False # Reset booking status
 
 def clear_selection():
     """Clears the selected hotel and AI recommendation."""
     st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
+    st.session_state.booking_confirmed_this_session = False # Reset booking status
+    st.session_state.submitted_booking_form_once = False # Reset form submission status
     st.toast("Selection cleared!")
     logging.info("Selection cleared")
 
@@ -402,6 +412,8 @@ def handle_ai_book():
     """Books the hotel recommended by the AI."""
     if st.session_state.ai_recommended_hotel:
         st.session_state.selected_hotel = st.session_state.ai_recommended_hotel
+        st.session_state.booking_confirmed_this_session = True # Mark booking as confirmed
+        st.session_state.submitted_booking_form_once = True # Mark form as submitted
         st.toast(f"AI's recommendation ({st.session_state.ai_recommended_hotel['name']}) booked!")
         logging.info(f"AI recommended hotel booked: {st.session_state.ai_recommended_hotel['name']}")
     else:
@@ -409,7 +421,7 @@ def handle_ai_book():
         logging.warning("Attempted to book AI recommendation but none exists")
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-@st.cache_data
+@st.cache_data(show_spinner=False) # Hide the default Streamlit spinner for this function
 def get_ai_recommendation(prompt, hotels_df, filters):
     """Fetches AI recommendation with retries."""
     chat_history = [{"role": "user", "parts": [{"text": prompt}]}]
@@ -484,11 +496,11 @@ filtered_hotels = apply_filters(hotels_df)
 paginated_hotels, current_page, total_pages = paginate_hotels(filtered_hotels)
 
 # Adjust the number input for page to reflect actual total pages
-if total_pages == 0: # If no hotels, set max_value to 1 and value to 1, and disable
-    st.number_input("Page", min_value=1, max_value=1, value=1, key="page", disabled=True)
-    st.write("Page 1 of 1")
+if total_pages == 0:
+    st.number_input("Page", min_value=1, max_value=1, value=1, key="page_input", disabled=True)
+    st.write("Page 1 of 1 (No hotels match filters)")
 else:
-    st.number_input("Page", min_value=1, max_value=total_pages, value=current_page, key="page")
+    st.number_input("Page", min_value=1, max_value=total_pages, value=current_page, key="page_input")
     st.write(f"Page {current_page} of {total_pages}")
 
 
@@ -511,13 +523,25 @@ if st.session_state.selected_hotel:
     st.write(f"**Type**: {hotel['type']}")
     
     with st.form("booking_form"):
-        check_in = st.date_input("Check-in Date")
-        check_out = st.date_input("Check-out Date")
+        # Set default dates for easier testing
+        today = datetime.date.today()
+        default_check_in = today + datetime.timedelta(days=7)
+        default_check_out = default_check_in + datetime.timedelta(days=3)
+
+        check_in = st.date_input("Check-in Date", value=default_check_in)
+        check_out = st.date_input("Check-out Date", value=default_check_out)
         guests = st.number_input("Number of Guests", min_value=1, max_value=10, value=2)
+        
         submitted = st.form_submit_button("Confirm Booking")
         if submitted:
-            st.success(f"Booking confirmed for {hotel['name']} from {check_in} to {check_out} for {guests} guests!")
-            logging.info(f"Booking confirmed: {hotel['name']}, {check_in} to {check_out}, {guests} guests")
+            # Basic date validation
+            if check_in >= check_out:
+                st.error("Check-out date must be after check-in date.")
+            else:
+                st.success(f"Booking confirmed for {hotel['name']} from {check_in} to {check_out} for {guests} guests!")
+                st.session_state.booking_confirmed_this_session = True # Mark booking as confirmed
+                st.session_state.submitted_booking_form_once = True # Mark form as submitted
+                logging.info(f"Booking confirmed: {hotel['name']}, {check_in} to {check_out}, {guests} guests")
     st.button("Clear Selection / Back to Home", key="clear_selection", on_click=clear_selection, help="Clear your current hotel selection and return to Browse.")
 else:
     st.info("No hotel has been selected yet. Click 'Book Now' on any hotel or ad.")
@@ -541,7 +565,9 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
 
         if available_hotels_for_ai.empty:
             st.warning("AI: No hotels found matching current filters to recommend.")
-            logging.warning("No hotels matched AI filters")
+            logging.warning("No hotels matched AI filters for recommendation")
+            st.session_state.ai_recommended_hotel = None
+            st.session_state.ai_reasoning = "No hotels found matching current filters."
         else:
             prompt = f"""
             As an AI hotel booking agent ({st.session_state.ai_model}), prioritize hotels with keywords like 'Valentine’s', 'romantic', or 'luxury' in their descriptions or ads when relevant to the user’s query.
@@ -569,39 +595,47 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
             """
             try:
                 result = get_ai_recommendation(prompt, hotels_df, current_filters)
-                logging.info(f"AI recommendation successful: {result}")
+                logging.info(f"AI recommendation raw response: {result}")
+                
+                # Extracting JSON string safely
+                json_string = None
                 if result.get("candidates") and result["candidates"][0].get("content") and result["candidates"][0]["content"].get("parts"):
-                    json_string = result["candidates"][0]["content"]["parts"][0]["text"]
+                    for part in result["candidates"][0]["content"]["parts"]:
+                        if part.get("text"):
+                            json_string = part["text"]
+                            break # Found the text part, break loop
+
+                if json_string:
                     parsed_json = json.loads(json_string)
                     recommended_hotel_id = parsed_json.get("recommendedHotelId")
                     reasoning = parsed_json.get("reasoning")
+                    
                     recommended_hotel = hotels_df[hotels_df["id"] == recommended_hotel_id]
                     if not recommended_hotel.empty:
                         st.session_state.ai_recommended_hotel = recommended_hotel.iloc[0].to_dict()
                         st.session_state.ai_reasoning = reasoning
                         st.success("AI Agent has a recommendation!")
                     else:
-                        st.warning("AI recommended an invalid hotel ID. Selecting default hotel.")
-                        # It's better to select a relevant default, or just clear if invalid.
-                        # For now, will clear to avoid misleading recommendations.
+                        st.warning(f"AI recommended an invalid hotel ID ({recommended_hotel_id}).")
                         st.session_state.ai_recommended_hotel = None 
-                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID."
+                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID not found in the list."
                         logging.warning(f"Invalid hotel ID recommended by AI: {recommended_hotel_id}")
                 else:
-                    st.warning("AI could not generate a valid recommendation format.")
+                    st.warning("AI could not generate a valid recommendation format (no text part found).")
                     st.session_state.ai_recommended_hotel = None
                     st.session_state.ai_reasoning = ""
-                    logging.warning("Invalid AI response format")
+                    logging.warning("Invalid AI response format: No text part")
+
             except requests.exceptions.RequestException as e:
                 st.markdown(f'<div class="error-message">Error connecting to API: {e}. Check your API key and network.</div>', unsafe_allow_html=True)
                 st.session_state.ai_recommended_hotel = None
                 st.session_state.ai_reasoning = ""
                 logging.error(f"API error: {e}")
-            except json.JSONDecodeError:
-                st.markdown('<div class="error-message">AI response was not valid JSON.</div>', unsafe_allow_html=True)
+            except json.JSONDecodeError as e:
+                st.markdown(f'<div class="error-message">AI response was not valid JSON: {e}. Raw response: <pre>{json_string}</pre></div>', unsafe_allow_html=True)
                 st.session_state.ai_recommended_hotel = None
                 st.session_state.ai_reasoning = ""
-                logging.error("JSON decode error in AI response")
+                logging.error(f"JSON decode error in AI response: {e}. Raw: {json_string}")
             except Exception as e:
                 st.markdown(f'<div class="error-message">Unexpected error: {e}</div>', unsafe_allow_html=True)
                 st.session_state.ai_recommended_hotel = None
@@ -619,6 +653,9 @@ if st.session_state.ai_recommended_hotel:
     st.write(f"**Keywords Acknowledged in AI Reasoning**: {keyword_count}/{len(keywords)}")
     st.button("Book AI Recommended Hotel", key="ai_book_button", on_click=handle_ai_book, help="Book the hotel recommended by the AI agent.")
     st.markdown("</div>", unsafe_allow_html=True)
+else:
+    if st.session_state.ai_reasoning: # Only show reasoning if it was set (e.g., for "no hotels found")
+        st.info(f"AI Agent's Response: {st.session_state.ai_reasoning}")
 
 st.markdown("</section>", unsafe_allow_html=True)
 
@@ -630,19 +667,11 @@ st.markdown('<div class="bg-blue-50 border border-blue-200 text-blue-800 p-6 rou
 st.write(f"**Banner Ad Clicks**: {st.session_state.banner_clicks}")
 st.write(f"**Sponsored Ad Clicks**: {st.session_state.sponsored_clicks}")
 st.write(f"**Filter Usage**: Price: {st.session_state.price_filter}, Rating: {st.session_state.rating_filter}, Type: {st.session_state.type_filter}")
-# This line was incorrect; selected_hotel being not None means *a* hotel is selected, not necessarily booked.
-# A more accurate booking completion metric would be after the "Confirm Booking" form is submitted.
-st.write(f"**Booking Completions (Current Session)**: {1 if st.session_state.get('booking_confirmed_this_session', False) else 0}")
+st.write(f"**Booking Completions (Current Session)**: {1 if st.session_state.booking_confirmed_this_session else 0}")
 st.write(f"**AI Recommendation Acknowledged (Selected)**: {1 if st.session_state.ai_recommended_hotel else 0}")
 
-# To make booking completions more accurate for the chart, let's add a session state for it
-if st.session_state.get('booking_confirmed_this_session', False) is False and st.session_state.selected_hotel and st.session_state.get('submitted_booking_form_once', False):
-    st.session_state.booking_confirmed_this_session = True # Set to True if a booking was confirmed in this session
-elif not st.session_state.selected_hotel:
-    st.session_state.booking_confirmed_this_session = False # Reset if selection is cleared
-
 # Chart data
-booking_completions_for_chart = 1 if st.session_state.get('booking_confirmed_this_session', False) else 0
+booking_completions_for_chart = 1 if st.session_state.booking_confirmed_this_session else 0
 ai_recommendation_selected_for_chart = 1 if st.session_state.ai_recommended_hotel else 0
 
 st.markdown(f"""
