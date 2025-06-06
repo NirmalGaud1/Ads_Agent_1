@@ -13,8 +13,12 @@ logging.basicConfig(filename="app.log", level=logging.INFO,
 
 # --- Load Environment Variables ---
 load_dotenv()
+
+# Directly set the API_KEY as it's not meant to be secret based on the prompt.
+# In a production environment, this should still be handled securely (e.g., Streamlit secrets, environment variable).
+API_KEY = "AIzaSyA-9-lTQTWdNM43YdOXMQwGKDy0SrMwo6c" 
+
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
 API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
 
 # --- Session State Initialization ---
@@ -268,7 +272,8 @@ def apply_filters(hotels_df):
             filtered_df = filtered_df.query("price > 250")
 
     if rating_filter != "All":
-        filtered_df = filtered_df.query("rating == @rating_filter")
+        # Convert rating_filter to integer for comparison if it's not "All"
+        filtered_df = filtered_df.query(f"rating == {int(rating_filter)}")
 
     if type_filter != "All":
         filtered_df = filtered_df.query("type == @type_filter")
@@ -281,8 +286,11 @@ def paginate_hotels(filtered_hotels, page_size=2):
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
     total_pages = (len(filtered_hotels) + page_size - 1) // page_size
-    if page > total_pages:
-        page = max(1, total_pages)
+    if page > total_pages and total_pages > 0: # Ensure total_pages is not 0 to avoid setting page to 0
+        page = total_pages
+        st.session_state.page = page
+    elif total_pages == 0: # If there are no hotels, page should be 1, or handle as empty
+        page = 1
         st.session_state.page = page
     return filtered_hotels.iloc[start_idx:end_idx], page, total_pages
 
@@ -300,7 +308,7 @@ def render_hotel_card(hotel):
         </div>
     """, unsafe_allow_html=True)
     st.button(f"Book {hotel['name']} Now", key=f"book_direct_{hotel['id']}", 
-              on_click=handle_direct_book, args=(hotel['id'],))
+              on_click=handle_direct_book, args=(hotel['id'],), help="Click to book this hotel directly.")
     
     if hotel["name"] == "Château Romance & Spa":
         st.markdown(f"""
@@ -310,7 +318,7 @@ def render_hotel_card(hotel):
             </div>
         """, unsafe_allow_html=True)
         st.button("Book Now (Sponsored Ad Offer)", key=f"sponsored_ad_button_{hotel['id']}", 
-                  on_click=handle_sponsored_click, args=(hotel['id'],))
+                  on_click=handle_sponsored_click, args=(hotel['id'],), help="Click to book via this sponsored ad.")
 
 def render_banner_ad():
     """Renders the banner ad based on selected ad format."""
@@ -324,26 +332,32 @@ def render_banner_ad():
                 <p class="price-info"><span class="line-through">€289</span> <strong>Now: €202/Night</strong></p>
             </section>
         """, unsafe_allow_html=True)
-        st.button("Book Now (Banner Ad Offer)", key="banner_ad_button", on_click=handle_banner_click)
+        st.button("Book Now (Banner Ad Offer)", key="banner_ad_button", on_click=handle_banner_click, help="Click to book this special banner offer.")
     elif ad_format == "Keyword-Embedded Image":
         st.markdown("""
             <section class="banner-ad" data-ad-type="banner" data-hotel-id="1">
                 <div class="hotel-card-image">Valentine’s Special Image: Boutique Hotel L’Amour - €202/Night</div>
             </section>
         """, unsafe_allow_html=True)
-        st.button("Book Now (Image Banner)", key="banner_ad_button", on_click=handle_banner_click)
-    else:  # Image-Only
+        st.button("Book Now (Image Banner)", key="banner_ad_button", on_click=handle_banner_click, help="Click to book this image banner offer.")
+    else: # Image-Only
         st.markdown("""
             <section class="banner-ad" data-ad-type="banner" data-hotel-id="1">
                 <div class="hotel-card-image">Promotional Image Placeholder</div>
             </section>
         """, unsafe_allow_html=True)
-        st.button("Book Now (Image-Only Banner)", key="banner_ad_button", on_click=handle_banner_click)
+        st.button("Book Now (Image-Only Banner)", key="banner_ad_button", on_click=handle_banner_click, help="Click to book this image-only banner offer.")
 
 def handle_banner_click():
     """Handles click on the banner ad."""
     st.session_state.banner_clicks += 1
-    st.session_state.selected_hotel = hotels_df[hotels_df["name"] == "Boutique Hotel L’Amour"].iloc[0].to_dict()
+    # Ensure the hotel ID for the banner ad (ID 1) exists in the DataFrame
+    if not hotels_df[hotels_df["id"] == 1].empty:
+        st.session_state.selected_hotel = hotels_df[hotels_df["id"] == 1].iloc[0].to_dict()
+    else:
+        st.error("Error: Banner ad hotel not found in data.")
+        logging.error("Banner ad hotel (ID 1) not found in hotels_df.")
+        st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
     st.toast("Banner Ad Clicked and Hotel Selected!")
@@ -352,19 +366,29 @@ def handle_banner_click():
 def handle_sponsored_click(hotel_id):
     """Handles click on a sponsored ad."""
     st.session_state.sponsored_clicks += 1
-    st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
+    if not hotels_df[hotels_df["id"] == hotel_id].empty:
+        st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
+        st.toast(f"Sponsored Ad Clicked for {st.session_state.selected_hotel['name']}!")
+        logging.info(f"Sponsored ad clicked for hotel ID {hotel_id}")
+    else:
+        st.error(f"Error: Sponsored ad hotel with ID {hotel_id} not found.")
+        logging.error(f"Sponsored ad hotel (ID {hotel_id}) not found in hotels_df.")
+        st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
-    st.toast(f"Sponsored Ad Clicked for {st.session_state.selected_hotel['name']}!")
-    logging.info(f"Sponsored ad clicked for hotel ID {hotel_id}")
 
 def handle_direct_book(hotel_id):
     """Handles direct booking click on a hotel listing."""
-    st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
+    if not hotels_df[hotels_df["id"] == hotel_id].empty:
+        st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
+        st.toast(f"Direct booking initiated for {st.session_state.selected_hotel['name']}!")
+        logging.info(f"Direct booking for hotel ID {hotel_id}")
+    else:
+        st.error(f"Error: Hotel with ID {hotel_id} not found for direct booking.")
+        logging.error(f"Direct booking hotel (ID {hotel_id}) not found in hotels_df.")
+        st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
-    st.toast(f"Direct booking initiated for {st.session_state.selected_hotel['name']}!")
-    logging.info(f"Direct booking for hotel ID {hotel_id}")
 
 def clear_selection():
     """Clears the selected hotel and AI recommendation."""
@@ -458,8 +482,15 @@ st.markdown("<hr>", unsafe_allow_html=True)
 st.subheader("Available Hotels")
 filtered_hotels = apply_filters(hotels_df)
 paginated_hotels, current_page, total_pages = paginate_hotels(filtered_hotels)
-st.number_input("Page", min_value=1, max_value=total_pages, value=current_page, key="page")
-st.write(f"Page {current_page} of {total_pages}")
+
+# Adjust the number input for page to reflect actual total pages
+if total_pages == 0: # If no hotels, set max_value to 1 and value to 1, and disable
+    st.number_input("Page", min_value=1, max_value=1, value=1, key="page", disabled=True)
+    st.write("Page 1 of 1")
+else:
+    st.number_input("Page", min_value=1, max_value=total_pages, value=current_page, key="page")
+    st.write(f"Page {current_page} of {total_pages}")
+
 
 if paginated_hotels.empty:
     st.info("No hotels match your current filters.")
@@ -487,7 +518,7 @@ if st.session_state.selected_hotel:
         if submitted:
             st.success(f"Booking confirmed for {hotel['name']} from {check_in} to {check_out} for {guests} guests!")
             logging.info(f"Booking confirmed: {hotel['name']}, {check_in} to {check_out}, {guests} guests")
-    st.button("Clear Selection / Back to Home", key="clear_selection", on_click=clear_selection)
+    st.button("Clear Selection / Back to Home", key="clear_selection", on_click=clear_selection, help="Clear your current hotel selection and return to Browse.")
 else:
     st.info("No hotel has been selected yet. Click 'Book Now' on any hotel or ad.")
 
@@ -498,7 +529,7 @@ st.markdown('<section class="ai-section">', unsafe_allow_html=True)
 st.subheader("AI Agent Hotel Recommendation")
 st.markdown("<p class='text-gray-700 text-center mb-4'>Click the button below to simulate an AI agent's decision-making process based on the current filters and available hotels.</p>", unsafe_allow_html=True)
 
-if st.button("Simulate AI Agent Decision", key="simulate_ai_button"):
+if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigger the AI agent to provide a hotel recommendation."):
     st.markdown('<div class="loading-spinner"></div>', unsafe_allow_html=True)
     with st.spinner(f"Simulating {st.session_state.ai_model} behavior..."):
         current_filters = {
@@ -551,9 +582,11 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button"):
                         st.success("AI Agent has a recommendation!")
                     else:
                         st.warning("AI recommended an invalid hotel ID. Selecting default hotel.")
-                        st.session_state.ai_recommended_hotel = hotels_df.iloc[0].to_dict()
-                        st.session_state.ai_reasoning = "Default selection due to invalid AI recommendation."
-                        logging.warning(f"Invalid hotel ID recommended: {recommended_hotel_id}")
+                        # It's better to select a relevant default, or just clear if invalid.
+                        # For now, will clear to avoid misleading recommendations.
+                        st.session_state.ai_recommended_hotel = None 
+                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID."
+                        logging.warning(f"Invalid hotel ID recommended by AI: {recommended_hotel_id}")
                 else:
                     st.warning("AI could not generate a valid recommendation format.")
                     st.session_state.ai_recommended_hotel = None
@@ -573,7 +606,7 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button"):
                 st.markdown(f'<div class="error-message">Unexpected error: {e}</div>', unsafe_allow_html=True)
                 st.session_state.ai_recommended_hotel = None
                 st.session_state.ai_reasoning = ""
-                logging.error(f"Unexpected error: {e}")
+                logging.error(f"Unexpected error during AI recommendation: {e}")
 
 # Display AI recommendation
 if st.session_state.ai_recommended_hotel:
@@ -581,10 +614,10 @@ if st.session_state.ai_recommended_hotel:
     st.markdown("<h3 class='text-xl font-semibold mb-2'>AI Agent's Recommendation:</h3>", unsafe_allow_html=True)
     st.write(f"**Hotel:** {st.session_state.ai_recommended_hotel['name']}")
     st.write(f"**Reasoning:** {st.session_state.ai_reasoning}")
-    keywords = ["Valentine’s", "romantic", "luxury"]
-    keyword_count = sum(1 for k in keywords if k.lower() in st.session_state.ai_reasoning.lower())
+    keywords = ["valentine’s", "romantic", "luxury"] # Lowercase for case-insensitive check
+    keyword_count = sum(1 for k in keywords if k in st.session_state.ai_reasoning.lower())
     st.write(f"**Keywords Acknowledged in AI Reasoning**: {keyword_count}/{len(keywords)}")
-    st.button("Book AI Recommended Hotel", key="ai_book_button", on_click=handle_ai_book)
+    st.button("Book AI Recommended Hotel", key="ai_book_button", on_click=handle_ai_book, help="Book the hotel recommended by the AI agent.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("</section>", unsafe_allow_html=True)
@@ -597,51 +630,64 @@ st.markdown('<div class="bg-blue-50 border border-blue-200 text-blue-800 p-6 rou
 st.write(f"**Banner Ad Clicks**: {st.session_state.banner_clicks}")
 st.write(f"**Sponsored Ad Clicks**: {st.session_state.sponsored_clicks}")
 st.write(f"**Filter Usage**: Price: {st.session_state.price_filter}, Rating: {st.session_state.rating_filter}, Type: {st.session_state.type_filter}")
-st.write(f"**Booking Completions**: {1 if st.session_state.selected_hotel else 0}")
-st.write(f"**AI Recommendation Acknowledged**: {1 if st.session_state.ai_recommended_hotel else 0}")
-st.markdown("""
+# This line was incorrect; selected_hotel being not None means *a* hotel is selected, not necessarily booked.
+# A more accurate booking completion metric would be after the "Confirm Booking" form is submitted.
+st.write(f"**Booking Completions (Current Session)**: {1 if st.session_state.get('booking_confirmed_this_session', False) else 0}")
+st.write(f"**AI Recommendation Acknowledged (Selected)**: {1 if st.session_state.ai_recommended_hotel else 0}")
+
+# To make booking completions more accurate for the chart, let's add a session state for it
+if st.session_state.get('booking_confirmed_this_session', False) is False and st.session_state.selected_hotel and st.session_state.get('submitted_booking_form_once', False):
+    st.session_state.booking_confirmed_this_session = True # Set to True if a booking was confirmed in this session
+elif not st.session_state.selected_hotel:
+    st.session_state.booking_confirmed_this_session = False # Reset if selection is cleared
+
+# Chart data
+booking_completions_for_chart = 1 if st.session_state.get('booking_confirmed_this_session', False) else 0
+ai_recommendation_selected_for_chart = 1 if st.session_state.ai_recommended_hotel else 0
+
+st.markdown(f"""
 ```chartjs
-{
+{{
     "type": "bar",
-    "data": {
+    "data": {{
         "labels": ["Banner Clicks", "Sponsored Clicks", "Bookings", "AI Recommendations"],
-        "datasets": [{
+        "datasets": [{{
             "label": "Interaction Metrics",
             "data": [
-                """ + str(st.session_state.banner_clicks) + """,
-                """ + str(st.session_state.sponsored_clicks) + """,
-                """ + str(1 if st.session_state.selected_hotel else 0) + """,
-                """ + str(1 if st.session_state.ai_recommended_hotel else 0) + """
+                {st.session_state.banner_clicks},
+                {st.session_state.sponsored_clicks},
+                {booking_completions_for_chart},
+                {ai_recommendation_selected_for_chart}
             ],
             "backgroundColor": ["#3b82f6", "#0d9488", "#9333ea", "#ef4444"],
             "borderColor": ["#2563eb", "#0f766e", "#7e22ce", "#dc2626"],
             "borderWidth": 1
-        }]
-    },
-    "options": {
-        "scales": {
-            "y": {
+        }}]
+    }},
+    "options": {{
+        "scales": {{
+            "y": {{
                 "beginAtZero": true,
-                "title": {
+                "title": {{
                     "display": true,
                     "text": "Count"
-                }
-            },
-            "x": {
-                "title": {
+                }}
+            }},
+            "x": {{
+                "title": {{
                     "display": true,
                     "text": "Metrics"
-                }
-            }
-        },
-        "plugins": {
-            "legend": {
+                }}
+            }}
+        }},
+        "plugins": {{
+            "legend": {{
                 "display": false
-            },
-            "title": {
+            }},
+            "title": {{
                 "display": true,
                 "text": "Ad and Booking Interaction Metrics"
-            }
-        }
-    }
-}
+            }}
+        }}
+    }}
+}}
