@@ -39,8 +39,8 @@ def initialize_session_state():
         "page": 1,
         "booking_confirmed_this_session": False,
         "submitted_booking_form_once": False,
-        "last_clicked_hotel_id": None, # NEW: To store the ID of the last clicked hotel/ad
-        "user_context_str": "" # NEW: To store a string representation of user context for prompt
+        "last_clicked_hotel_id": None, 
+        "last_clicked_hotel_context": "" # NEW: To store more detailed context about the clicked item
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -335,8 +335,7 @@ def render_banner_ad():
         st.markdown("""
             <section class="banner-ad" data-ad-type="banner" data-hotel-id="1">
                 <h3>Valentines Special - 30% Off!</h3>
-                <p>Book your romantic luxury stay at Boutique Hotel L’Amour in Paris.</p>
-                <p>Includes Champagne reception and Candle-Light Dinner.</p>
+                <p id="banner_ad_text">Book your romantic luxury stay at Boutique Hotel L’Amour in Paris. Includes Champagne reception and Candle-Light Dinner.</p>
                 <p class="price-info"><span class="line-through">€289</span> <strong>Now: €202/Night</strong></p>
             </section>
         """, unsafe_allow_html=True)
@@ -344,17 +343,17 @@ def render_banner_ad():
     elif ad_format == "Keyword-Embedded Image":
         st.markdown("""
             <section class="banner-ad" data-ad-type="banner" data-hotel-id="1">
-                <div class="hotel-card-image">Valentine’s Special Image: Boutique Hotel L’Amour - €202/Night</div>
+                <div class="hotel-card-image" id="banner_ad_image_text">Valentine’s Special Image: Boutique Hotel L’Amour - €202/Night</div>
             </section>
         """, unsafe_allow_html=True)
-        st.button("Book Now (Image Banner)", key="banner_ad_button", on_click=handle_banner_click, help="Click to book this image banner offer.")
+        st.button("Book Now (Image Banner)", key="banner_ad_button", on_on_click=handle_banner_click, help="Click to book this image banner offer.")
     else: # Image-Only
         st.markdown("""
             <section class="banner-ad" data-ad-type="banner" data-hotel-id="1">
-                <div class="hotel-card-image">Promotional Image Placeholder</div>
+                <div class="hotel-card-image" id="banner_ad_image_only_text">Promotional Image Placeholder</div>
             </section>
         """, unsafe_allow_html=True)
-        st.button("Book Now (Image-Only Banner)", key="banner_ad_button", on_click=handle_banner_click, help="Click to book this image-only banner offer.")
+        st.button("Book Now (Image-Only Banner)", key="banner_ad_button", on_on_click=handle_banner_click, help="Click to book this image-only banner offer.")
 
 def handle_banner_click():
     """Handles click on the banner ad."""
@@ -362,15 +361,23 @@ def handle_banner_click():
     # Ensure the hotel ID for the banner ad (ID 1) exists in the DataFrame
     if not hotels_df[hotels_df["id"] == 1].empty:
         st.session_state.selected_hotel = hotels_df[hotels_df["id"] == 1].iloc[0].to_dict()
-        st.session_state.last_clicked_hotel_id = 1 # Set the last clicked hotel ID
+        st.session_state.last_clicked_hotel_id = 1 
+        # Capture the ad text for context
+        if st.session_state.ad_format == "Text-Based":
+            st.session_state.last_clicked_hotel_context = "User clicked the 'Valentines Special' banner ad for Boutique Hotel L’Amour, which offers 30% off, Champagne reception, and Candle-Light Dinner."
+        elif st.session_state.ad_format == "Keyword-Embedded Image":
+            st.session_state.last_clicked_hotel_context = "User clicked the keyword-embedded image banner for Boutique Hotel L’Amour, implying interest in the 'Valentine’s Special' and the €202/Night price."
+        else: # Image-Only
+            st.session_state.last_clicked_hotel_context = "User clicked the image-only banner ad, indicating general interest in the special promotion for Boutique Hotel L’Amour."
     else:
         st.error("Error: Banner ad hotel not found in data.")
         logging.error("Banner ad hotel (ID 1) not found in hotels_df.")
         st.session_state.selected_hotel = None
         st.session_state.last_clicked_hotel_id = None
+        st.session_state.last_clicked_hotel_context = ""
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
-    st.session_state.booking_confirmed_this_session = False # Reset booking status
+    st.session_state.booking_confirmed_this_session = False
     st.toast("Banner Ad Clicked and Hotel Selected!")
     logging.info("Banner ad clicked")
 
@@ -379,7 +386,8 @@ def handle_sponsored_click(hotel_id):
     st.session_state.sponsored_clicks += 1
     if not hotels_df[hotels_df["id"] == hotel_id].empty:
         st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
-        st.session_state.last_clicked_hotel_id = hotel_id # Set the last clicked hotel ID
+        st.session_state.last_clicked_hotel_id = hotel_id
+        st.session_state.last_clicked_hotel_context = f"User clicked the sponsored ad for Château Romance & Spa, highlighting it as a 'Luxury Wellness Holiday' from €{st.session_state.selected_hotel['price']}/night."
         st.toast(f"Sponsored Ad Clicked for {st.session_state.selected_hotel['name']}!")
         logging.info(f"Sponsored ad clicked for hotel ID {hotel_id}")
     else:
@@ -387,15 +395,18 @@ def handle_sponsored_click(hotel_id):
         logging.error(f"Sponsored ad hotel (ID {hotel_id}) not found in hotels_df.")
         st.session_state.selected_hotel = None
         st.session_state.last_clicked_hotel_id = None
+        st.session_state.last_clicked_hotel_context = ""
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
-    st.session_state.booking_confirmed_this_session = False # Reset booking status
+    st.session_state.booking_confirmed_this_session = False
 
 def handle_direct_book(hotel_id):
     """Handles direct booking click on a hotel listing."""
     if not hotels_df[hotels_df["id"] == hotel_id].empty:
         st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
-        st.session_state.last_clicked_hotel_id = hotel_id # Set the last clicked hotel ID
+        st.session_state.last_clicked_hotel_id = hotel_id
+        # For direct clicks, use the hotel's description as context
+        st.session_state.last_clicked_hotel_context = f"User directly clicked on the listing for {st.session_state.selected_hotel['name']}, indicating interest in its features: \"{st.session_state.selected_hotel['description']}\" (Price: €{st.session_state.selected_hotel['price']}, Rating: {st.session_state.selected_hotel['rating']} stars, Type: {st.session_state.selected_hotel['type']})."
         st.toast(f"Direct booking initiated for {st.session_state.selected_hotel['name']}!")
         logging.info(f"Direct booking for hotel ID {hotel_id}")
     else:
@@ -403,9 +414,10 @@ def handle_direct_book(hotel_id):
         logging.error(f"Direct booking hotel (ID {hotel_id}) not found in hotels_df.")
         st.session_state.selected_hotel = None
         st.session_state.last_clicked_hotel_id = None
+        st.session_state.last_clicked_hotel_context = ""
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
-    st.session_state.booking_confirmed_this_session = False # Reset booking status
+    st.session_state.booking_confirmed_this_session = False
 
 def clear_selection():
     """Clears the selected hotel and AI recommendation."""
@@ -414,7 +426,8 @@ def clear_selection():
     st.session_state.ai_reasoning = ""
     st.session_state.booking_confirmed_this_session = False
     st.session_state.submitted_booking_form_once = False
-    st.session_state.last_clicked_hotel_id = None # Clear the last clicked hotel ID
+    st.session_state.last_clicked_hotel_id = None
+    st.session_state.last_clicked_hotel_context = "" # Clear the context too
     st.toast("Selection cleared!")
     logging.info("Selection cleared")
 
@@ -432,7 +445,7 @@ def handle_ai_book():
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 @st.cache_data(show_spinner=False)
-def get_ai_recommendation(prompt, filtered_hotels_data_for_ai_as_string, user_context_str): # Added user_context_str
+def get_ai_recommendation(prompt, filtered_hotels_data_for_ai_as_string, last_clicked_hotel_id, last_clicked_hotel_context): # Added both to cache key
     """Fetches AI recommendation with retries."""
     chat_history = [{"role": "user", "parts": [{"text": prompt}]}]
     payload = {
@@ -573,15 +586,16 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
         }
         available_hotels_for_ai = apply_filters(hotels_df)
 
-        # Prepare user context string
-        user_context_str = ""
-        if st.session_state.last_clicked_hotel_id:
+        user_context_str_for_prompt = st.session_state.last_clicked_hotel_context
+        if not user_context_str_for_prompt and st.session_state.last_clicked_hotel_id:
+             # Fallback if context wasn't explicitly set (shouldn't happen with updated handlers)
             clicked_hotel_info = hotels_df[hotels_df["id"] == st.session_state.last_clicked_hotel_id]
             if not clicked_hotel_info.empty:
-                clicked_hotel_name = clicked_hotel_info.iloc[0]['name']
-                user_context_str = f"The user recently clicked on/showed interest in Hotel ID: {st.session_state.last_clicked_hotel_id} ({clicked_hotel_name})."
+                user_context_str_for_prompt = f"The user recently clicked on Hotel ID: {st.session_state.last_clicked_hotel_id} ({clicked_hotel_info.iloc[0]['name']})."
             else:
-                user_context_str = "The user recently clicked on an ad/hotel that is no longer available."
+                user_context_str_for_prompt = "The user recently clicked on an ad/hotel that is no longer available or couldn't be identified."
+        elif not user_context_str_for_prompt:
+            user_context_str_for_prompt = "No specific recent user click detected."
 
 
         if available_hotels_for_ai.empty:
@@ -594,28 +608,28 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
             available_hotels_str = available_hotels_for_ai.apply(lambda h: f"ID: {h['id']}, Name: {h['name']}, Price: €{h['price']}, Rating: {h['rating']} Stars, Type: {h['type']}, Location: {h['location']}, Description: \"{h['description']}\"", axis=1).str.cat(sep='\n')
 
             prompt = f"""
-            You are an AI hotel booking agent ({st.session_state.ai_model}). Your primary goal is to recommend a hotel that best matches the user's current filter preferences.
+            You are an AI hotel booking agent ({st.session_state.ai_model}). Your primary goal is to recommend the single best hotel that aligns with the user's explicit filters and implicit interests, especially their most recent click.
             
             Current User Filters:
             - Price Range: {current_filters['price']}
             - Star Rating: {current_filters['rating']}
             - Vacation Type: {current_filters['type']}
             
-            User Context: {user_context_str if user_context_str else "No specific recent user click detected."}
+            User's Recent Interaction Context: {user_context_str_for_prompt}
             
             Available Hotels (from which you MUST choose):
             {available_hotels_str}
             
-            Consider the following advertisements, but only recommend these hotels if they *fully meet* the user's current filters:
-            - "Valentines Special" banner ad for "Boutique Hotel L’Amour" (ID: 1, data-ad-type="banner", data-hotel-id="1") - discounted to €202/Night.
-            - Sponsored ad for "Château Romance & Spa" (ID: 2, data-ad-type="sponsored", data-hotel-id="2") - highlighted as a "Luxury Wellness Holiday".
+            Advertisements to consider (note their content for potential use in reasoning):
+            - "Valentines Special" banner ad for "Boutique Hotel L’Amour" (ID: 1, data-ad-type="banner", data-hotel-id="1") - discounted to €202/Night, includes Champagne reception and Candle-Light Dinner.
+            - Sponsored ad for "Château Romance & Spa" (ID: 2, data-ad-type="sponsored", data-hotel-id="2") - highlighted as a "Luxury Wellness Holiday" at €289/Night.
             
             Based on the user's filters, the available hotels, and their recent click behavior, recommend ONE hotel by its ID.
             
-            **Important Logic:**
-            1. If the user has recently clicked on a hotel (indicated by "User Context") AND that hotel is still present in the "Available Hotels" list (meaning it passes the current filters), **strongly prioritize recommending that specific hotel.**
-            2. If the user's last clicked hotel is NOT in the "Available Hotels" list (e.g., due to filters), then select the best hotel from the "Available Hotels" that matches the current filters, possibly considering the advertised options if they fit.
-            3. Provide a concise reasoning for your choice.
+            **Important Recommendation Logic:**
+            1. If the user has recently clicked on a hotel (indicated by "User's Recent Interaction Context") AND that hotel is still present in the "Available Hotels" list (meaning it passes all current filters), **you MUST recommend that specific hotel.**
+            2. If the user's last clicked hotel is NOT in the "Available Hotels" list (e.g., due to newly applied filters), then select the *best* hotel from the "Available Hotels" that matches the current filters.
+            3. Your `reasoning` should be **detailed, persuasive, and directly address why this recommendation is ideal for the user**, explicitly referencing their recent click and incorporating appealing aspects of the hotel or ad content (e.g., "discount," "luxury wellness," "romantic stay," "features like Champagne reception"). Aim for a reasoning that would genuinely attract the person.
             
             Provide your response as a JSON object:
             {{
@@ -624,8 +638,13 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
             }}
             """
             try:
-                # Pass both the filtered hotels string AND the user context string to the cache key
-                result = get_ai_recommendation(prompt, available_hotels_str, user_context_str)
+                # Pass all relevant context for cache key: prompt content itself, and the context string
+                result = get_ai_recommendation(
+                    prompt, 
+                    available_hotels_str, 
+                    st.session_state.last_clicked_hotel_id, # Also part of the cache key for freshness
+                    user_context_str_for_prompt # Also part of the cache key for freshness
+                )
                 logging.info(f"AI recommendation raw response: {result}")
                 
                 json_string = None
@@ -640,16 +659,23 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
                     recommended_hotel_id = parsed_json.get("recommendedHotelId")
                     reasoning = parsed_json.get("reasoning")
                     
-                    recommended_hotel = hotels_df[hotels_df["id"] == recommended_hotel_id]
-                    if not recommended_hotel.empty:
-                        st.session_state.ai_recommended_hotel = recommended_hotel.iloc[0].to_dict()
+                    # Validate the recommended ID against the currently filtered hotels
+                    # This adds robustness in case the AI hallucinates an ID or misinterprets filters.
+                    if recommended_hotel_id is not None and recommended_hotel_id in available_hotels_for_ai['id'].values:
+                        st.session_state.ai_recommended_hotel = available_hotels_for_ai[available_hotels_for_ai["id"] == recommended_hotel_id].iloc[0].to_dict()
                         st.session_state.ai_reasoning = reasoning
                         st.success("AI Agent has a recommendation!")
                     else:
-                        st.warning(f"AI recommended an invalid hotel ID ({recommended_hotel_id}).")
-                        st.session_state.ai_recommended_hotel = None 
-                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID not found in the list."
-                        logging.warning(f"Invalid hotel ID recommended by AI: {recommended_hotel_id}")
+                        # Fallback if AI recommends an invalid or filtered-out hotel
+                        st.warning(f"AI recommended an invalid or filtered-out hotel ID ({recommended_hotel_id}). Recommending a default from available or asking to refine filters.")
+                        if not available_hotels_for_ai.empty:
+                            # Revert to a simple default if AI's pick is bad
+                            st.session_state.ai_recommended_hotel = available_hotels_for_ai.iloc[0].to_dict()
+                            st.session_state.ai_reasoning = f"The AI's initial recommendation was not valid under current filters. Based on your filters, we suggest {st.session_state.ai_recommended_hotel['name']} (ID: {st.session_state.ai_recommended_hotel['id']})."
+                        else:
+                            st.session_state.ai_recommended_hotel = None
+                            st.session_state.ai_reasoning = "AI could not provide a valid recommendation based on current filters. Please adjust your filters."
+                        logging.warning(f"Invalid AI recommendation detected. AI ID: {recommended_hotel_id}. Available IDs: {available_hotels_for_ai['id'].tolist()}")
                 else:
                     st.warning("AI could not generate a valid recommendation format (no text part found).")
                     st.session_state.ai_recommended_hotel = None
@@ -678,9 +704,13 @@ if st.session_state.ai_recommended_hotel:
     st.markdown("<h3 class='text-xl font-semibold mb-2'>AI Agent's Recommendation:</h3>", unsafe_allow_html=True)
     st.write(f"**Hotel:** {st.session_state.ai_recommended_hotel['name']}")
     st.write(f"**Reasoning:** {st.session_state.ai_reasoning}")
-    keywords = ["valentine’s", "romantic", "luxury"] # Lowercase for case-insensitive check
-    keyword_count = sum(1 for k in keywords if k in st.session_state.ai_reasoning.lower())
-    st.write(f"**Keywords Acknowledged in AI Reasoning**: {keyword_count}/{len(keywords)}")
+    
+    # You can customize these keywords based on what you expect the AI to highlight
+    keywords_to_check = ["romantic", "luxury", "wellness", "discount", "special offer", "charming", "city center", "spa", "champagne", "candle-light", "organic"] 
+    reasoning_lower = st.session_state.ai_reasoning.lower()
+    acknowledged_keywords = [k for k in keywords_to_check if k in reasoning_lower]
+    st.write(f"**Keywords Acknowledged in AI Reasoning**: {len(acknowledged_keywords)}/{len(keywords_to_check)} ({', '.join(acknowledged_keywords) if acknowledged_keywords else 'None'})")
+
     st.button("Book AI Recommended Hotel", key="ai_book_button", on_click=handle_ai_book, help="Book the hotel recommended by the AI agent.")
     st.markdown("</div>", unsafe_allow_html=True)
 else:
@@ -696,6 +726,7 @@ st.write(f"**Banner Ad Clicks**: {st.session_state.banner_clicks}")
 st.write(f"**Sponsored Ad Clicks**: {st.session_state.sponsored_clicks}")
 st.write(f"**Filter Usage**: Price: {st.session_state.price_filter}, Rating: {st.session_state.rating_filter}, Type: {st.session_state.type_filter}")
 st.write(f"**Last Hotel Clicked (ID)**: {st.session_state.last_clicked_hotel_id if st.session_state.last_clicked_hotel_id else 'None'}")
+st.write(f"**Last Click Context**: {st.session_state.last_clicked_hotel_context if st.session_state.last_clicked_hotel_context else 'None'}") # Display the context
 st.write(f"**Booking Completions (Current Session)**: {1 if st.session_state.booking_confirmed_this_session else 0}")
 st.write(f"**AI Recommendation Acknowledged (Selected)**: {1 if st.session_state.ai_recommended_hotel else 0}")
 
