@@ -719,3 +719,4 @@ st.markdown(f"""
         }}
     }}
 }}
+""", unsafe_allow_html=True)
