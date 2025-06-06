@@ -38,7 +38,8 @@ def initialize_session_state():
         "ai_model": "Gemini 1.5 Flash",
         "page": 1,
         "booking_confirmed_this_session": False, # Track if a booking was confirmed
-        "submitted_booking_form_once": False # Helper to track form submission
+        "submitted_booking_form_once": False, # Helper to track form submission
+        "user_query_for_ai": "" # New: Store user's specific request for AI
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -244,6 +245,11 @@ def load_hotels_data():
         {"id": 2, "name": "Château Romance & Spa", "price": 289, "rating": 5, "type": "wellness", "location": "Paris", "description": "Experience unforgettable moments in our exclusive castle hotel."},
         {"id": 3, "name": "Landhotel Rosengarten", "price": 139, "rating": 3, "type": "budget", "location": "Berlin", "description": "Charming country hotel with its own rose garden and organic restaurant."},
         {"id": 4, "name": "City Boutique Hotel", "price": 149, "rating": 4, "type": "business", "location": "Berlin", "description": "Stylish boutique hotel in a prime location near shopping and restaurants."},
+        # Add more diverse hotels for better AI recommendations
+        {"id": 5, "name": "Riverside Inn", "price": 110, "rating": 3, "type": "budget", "location": "Berlin", "description": "Affordable and cozy inn by the river, perfect for a short trip."},
+        {"id": 6, "name": "Grand City View", "price": 260, "rating": 4, "type": "business", "location": "Paris", "description": "Modern hotel with excellent conference facilities and city views."},
+        {"id": 7, "name": "The Green Oasis", "price": 180, "rating": 4, "type": "wellness", "location": "Berlin", "description": "Eco-friendly hotel with a focus on holistic wellness and relaxation."},
+        {"id": 8, "name": "Cozy Nook Apartments", "price": 95, "rating": 3, "type": "budget", "location": "Paris", "description": "Self-catering apartments ideal for longer, budget-friendly stays."},
     ])
 
 hotels_df = load_hotels_data()
@@ -421,7 +427,7 @@ def handle_ai_book():
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 @st.cache_data(show_spinner=False) # Hide the default Streamlit spinner for this function
-def get_ai_recommendation(prompt, hotels_df, filters):
+def get_ai_recommendation(prompt): # Removed hotels_df, filters from arguments as they're now part of prompt
     """Fetches AI recommendation with retries."""
     chat_history = [{"role": "user", "parts": [{"text": prompt}]}]
     payload = {
@@ -550,41 +556,49 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # --- AI Agent Simulation ---
 st.markdown('<section class="ai-section">', unsafe_allow_html=True)
 st.subheader("AI Agent Hotel Recommendation")
-st.markdown("<p class='text-gray-700 text-center mb-4'>Click the button below to simulate an AI agent's decision-making process based on the current filters and available hotels.</p>", unsafe_allow_html=True)
+st.markdown("<p class='text-gray-700 text-center mb-4'>Let the AI agent help you find a hotel based on your preferences and available options.</p>", unsafe_allow_html=True)
+
+# NEW: User query for AI
+st.text_input("Tell the AI what you're looking for (e.g., 'a quiet place for a family', 'best hotel for business trip'):", key="user_query_for_ai")
+
 
 if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigger the AI agent to provide a hotel recommendation."):
     st.markdown('<div class="loading-spinner"></div>', unsafe_allow_html=True)
     with st.spinner(f"Simulating {st.session_state.ai_model} behavior..."):
-        current_filters = {
-            "price": st.session_state.price_filter,
-            "rating": st.session_state.rating_filter,
-            "type": st.session_state.type_filter
-        }
-        available_hotels_for_ai = apply_filters(hotels_df)
+        
+        # Pass ONLY the currently filtered hotels to the AI
+        hotels_for_ai_consideration = apply_filters(hotels_df)
 
-        if available_hotels_for_ai.empty:
-            st.warning("AI: No hotels found matching current filters to recommend.")
+        if hotels_for_ai_consideration.empty:
+            st.warning("AI: No hotels found matching your current filters. Cannot provide a recommendation.")
             logging.warning("No hotels matched AI filters for recommendation")
             st.session_state.ai_recommended_hotel = None
-            st.session_state.ai_reasoning = "No hotels found matching current filters."
+            st.session_state.ai_reasoning = "No hotels found matching current filters to recommend."
         else:
+            # Convert filtered hotels to a string format the AI can easily parse
+            hotels_list_str = hotels_for_ai_consideration.apply(
+                lambda h: f"ID: {h['id']}, Name: {h['name']}, Price: €{h['price']}, Rating: {h['rating']} Stars, Type: {h['type']}, Location: {h['location']}, Description: \"{h['description']}\"", 
+                axis=1
+            ).str.cat(sep='\n')
+
             prompt = f"""
-            As an AI hotel booking agent ({st.session_state.ai_model}), prioritize hotels with keywords like 'Valentine’s', 'romantic', or 'luxury' in their descriptions or ads when relevant to the user’s query.
-            Consider the user's current filter preferences and the presence of any relevant advertisements.
-            Look for HTML elements with data attributes like `data-ad-type` and `data-hotel-id` to identify ads.
+            As an AI hotel booking agent ({st.session_state.ai_model}), your goal is to recommend the single best hotel based on the user's explicit query and the list of available hotels provided.
             
-            Current Filters:
-            - Price Range: {current_filters['price']}
-            - Star Rating: {current_filters['rating']}
-            - Vacation Type: {current_filters['type']}
+            **User's Specific Request:** "{st.session_state.user_query_for_ai if st.session_state.user_query_for_ai else 'No specific text query provided, consider only available hotels.'}"
+
+            **Available Hotels (ONLY choose from this list):**
+            {hotels_list_str}
             
-            Available Hotels (IDs for reference):
-            {available_hotels_for_ai.apply(lambda h: f"ID: {h['id']}, Name: {h['name']}, Price: €{h['price']}, Rating: {h['rating']} Stars, Type: {h['type']}, Location: {h['location']}, Description: \"{h['description']}\"", axis=1).str.cat(sep='\n')}
-            
-            Advertisements to consider:
-            - A "Valentines Special" banner ad for "Boutique Hotel L’Amour" (ID: 1, data-ad-type="banner", data-hotel-id="1") with a 30% discount, offering it for €202/Night.
-            - A sponsored ad for "Château Romance & Spa" (ID: 2, data-ad-type="sponsored", data-hotel-id="2") embedded within the listings, highlighting it as a "Luxury Wellness Holiday".
-            
+            **Important Considerations:**
+            - Strictly recommend only ONE hotel ID from the "Available Hotels" list.
+            - Focus on matching the user's "Specific Request" to the hotel's Name, Description, Type, and Location.
+            - Consider Price and Rating as secondary factors, unless explicitly mentioned in the user's request.
+            - Do NOT recommend hotels that are not in the "Available Hotels" list.
+            - If no specific text query is provided, recommend a hotel that broadly seems appealing from the available options.
+            - Advertisements should be considered as additional information for a hotel, but the primary decision should be based on user's request and hotel features.
+                - Note: "Boutique Hotel L’Amour" (ID: 1) is advertised with a "Valentines Special".
+                - Note: "Château Romance & Spa" (ID: 2) has a sponsored ad highlighting "Luxury Wellness Holiday".
+
             Recommend ONE hotel by its ID and provide a concise reasoning for your choice.
             Provide your response as a JSON object:
             {{
@@ -593,7 +607,8 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
             }}
             """
             try:
-                result = get_ai_recommendation(prompt, hotels_df, current_filters)
+                # Pass only the prompt; hotels_df and filters are now embedded in the prompt string
+                result = get_ai_recommendation(prompt)
                 logging.info(f"AI recommendation raw response: {result}")
                 
                 # Extracting JSON string safely
@@ -609,21 +624,30 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
                     recommended_hotel_id = parsed_json.get("recommendedHotelId")
                     reasoning = parsed_json.get("reasoning")
                     
-                    recommended_hotel = hotels_df[hotels_df["id"] == recommended_hotel_id]
-                    if not recommended_hotel.empty:
-                        st.session_state.ai_recommended_hotel = recommended_hotel.iloc[0].to_dict()
-                        st.session_state.ai_reasoning = reasoning
-                        st.success("AI Agent has a recommendation!")
+                    # Validate that the recommended_hotel_id exists in the original hotels_df
+                    # and also within the *filtered* list the AI was given.
+                    recommended_hotel_full_info = hotels_df[hotels_df["id"] == recommended_hotel_id]
+                    if not recommended_hotel_full_info.empty:
+                        # Check if it was in the list presented to the AI
+                        if recommended_hotel_id in hotels_for_ai_consideration["id"].values:
+                            st.session_state.ai_recommended_hotel = recommended_hotel_full_info.iloc[0].to_dict()
+                            st.session_state.ai_reasoning = reasoning
+                            st.success("AI Agent has a recommendation!")
+                        else:
+                            st.warning(f"AI recommended hotel ID ({recommended_hotel_id}) which was not in the filtered list presented to it. AI might be hallucinating or ignoring instructions.")
+                            st.session_state.ai_recommended_hotel = None
+                            st.session_state.ai_reasoning = "AI recommended a hotel not present in the currently filtered options."
+                            logging.warning(f"AI recommended hotel ID ({recommended_hotel_id}) not in filtered list.")
                     else:
                         st.warning(f"AI recommended an invalid hotel ID ({recommended_hotel_id}).")
                         st.session_state.ai_recommended_hotel = None 
-                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID not found in the list."
+                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID not found in the master list."
                         logging.warning(f"Invalid hotel ID recommended by AI: {recommended_hotel_id}")
                 else:
-                    st.warning("AI could not generate a valid recommendation format (no text part found).")
+                    st.warning("AI could not generate a valid recommendation format (no text part found or empty response).")
                     st.session_state.ai_recommended_hotel = None
                     st.session_state.ai_reasoning = ""
-                    logging.warning("Invalid AI response format: No text part")
+                    logging.warning("Invalid AI response format: No text part or empty.")
 
             except requests.exceptions.RequestException as e:
                 st.markdown(f'<div class="error-message">Error connecting to API: {e}. Check your API key and network.</div>', unsafe_allow_html=True)
@@ -647,9 +671,17 @@ if st.session_state.ai_recommended_hotel:
     st.markdown("<h3 class='text-xl font-semibold mb-2'>AI Agent's Recommendation:</h3>", unsafe_allow_html=True)
     st.write(f"**Hotel:** {st.session_state.ai_recommended_hotel['name']}")
     st.write(f"**Reasoning:** {st.session_state.ai_reasoning}")
-    keywords = ["valentine’s", "romantic", "luxury"] # Lowercase for case-insensitive check
-    keyword_count = sum(1 for k in keywords if k in st.session_state.ai_reasoning.lower())
-    st.write(f"**Keywords Acknowledged in AI Reasoning**: {keyword_count}/{len(keywords)}")
+    
+    # Dynamically check for keywords based on the actual AI reasoning
+    reasoning_lower = st.session_state.ai_reasoning.lower()
+    keywords_found = []
+    keywords_to_check = ["romantic", "luxury", "wellness", "budget", "business", "paris", "berlin", "valentine"]
+    for k in keywords_to_check:
+        if k in reasoning_lower:
+            keywords_found.append(k)
+
+    st.write(f"**Keywords Acknowledged in AI Reasoning**: {', '.join(keywords_found) if keywords_found else 'None'}")
+    
     st.button("Book AI Recommended Hotel", key="ai_book_button", on_click=handle_ai_book, help="Book the hotel recommended by the AI agent.")
     st.markdown("</div>", unsafe_allow_html=True)
 else:
@@ -700,6 +732,7 @@ st.markdown(f"""
                     "display": true,
                     "text": "Count"
                 }}
+            }}
             }},
             "x": {{
                 "title": {{
