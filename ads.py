@@ -720,3 +720,6 @@ st.markdown(f"""
         }}
     }}
 }}
+""", unsafe_allow_html=True)
+st.markdown("&lt;/div>", unsafe_allow_html=True)
+st.markdown("&lt;/div>", unsafe_allow_html=True)
