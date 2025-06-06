@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential
 import logging
-import datetime # Import datetime for date inputs
+import datetime
 
 # --- Setup Logging ---
 logging.basicConfig(filename="app.log", level=logging.INFO,
@@ -37,9 +37,10 @@ def initialize_session_state():
         "ad_format": "Text-Based",
         "ai_model": "Gemini 1.5 Flash",
         "page": 1,
-        "booking_confirmed_this_session": False, # Track if a booking was confirmed
-        "submitted_booking_form_once": False, # Helper to track form submission
-        "user_query_for_ai": "" # New: Store user's specific request for AI
+        "booking_confirmed_this_session": False,
+        "submitted_booking_form_once": False,
+        "last_clicked_hotel_id": None, # NEW: To store the ID of the last clicked hotel/ad
+        "user_context_str": "" # NEW: To store a string representation of user context for prompt
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -245,11 +246,6 @@ def load_hotels_data():
         {"id": 2, "name": "Château Romance & Spa", "price": 289, "rating": 5, "type": "wellness", "location": "Paris", "description": "Experience unforgettable moments in our exclusive castle hotel."},
         {"id": 3, "name": "Landhotel Rosengarten", "price": 139, "rating": 3, "type": "budget", "location": "Berlin", "description": "Charming country hotel with its own rose garden and organic restaurant."},
         {"id": 4, "name": "City Boutique Hotel", "price": 149, "rating": 4, "type": "business", "location": "Berlin", "description": "Stylish boutique hotel in a prime location near shopping and restaurants."},
-        # Add more diverse hotels for better AI recommendations
-        {"id": 5, "name": "Riverside Inn", "price": 110, "rating": 3, "type": "budget", "location": "Berlin", "description": "Affordable and cozy inn by the river, perfect for a short trip."},
-        {"id": 6, "name": "Grand City View", "price": 260, "rating": 4, "type": "business", "location": "Paris", "description": "Modern hotel with excellent conference facilities and city views."},
-        {"id": 7, "name": "The Green Oasis", "price": 180, "rating": 4, "type": "wellness", "location": "Berlin", "description": "Eco-friendly hotel with a focus on holistic wellness and relaxation."},
-        {"id": 8, "name": "Cozy Nook Apartments", "price": 95, "rating": 3, "type": "budget", "location": "Paris", "description": "Self-catering apartments ideal for longer, budget-friendly stays."},
     ])
 
 hotels_df = load_hotels_data()
@@ -316,6 +312,7 @@ def render_hotel_card(hotel):
             <p class="text-gray-700 text-sm italic mb-4">{hotel['description']}</p>
         </div>
     """, unsafe_allow_html=True)
+    # Added key to ensure unique button across runs
     st.button(f"Book {hotel['name']} Now", key=f"book_direct_{hotel['id']}", 
               on_click=handle_direct_book, args=(hotel['id'],), help="Click to book this hotel directly.")
     
@@ -327,6 +324,7 @@ def render_hotel_card(hotel):
                 <p>Experience unforgettable moments in our exclusive castle hotel!<br>Luxury Wellness Holiday - From €{hotel['price']}/night.</p>
             </div>
         """, unsafe_allow_html=True)
+        # Added key to ensure unique button across runs
         st.button("Book Now (Sponsored Ad Offer)", key=f"sponsored_ad_button_{hotel['id']}", 
                   on_click=handle_sponsored_click, args=(hotel['id'],), help="Click to book via this sponsored ad.")
 
@@ -364,10 +362,12 @@ def handle_banner_click():
     # Ensure the hotel ID for the banner ad (ID 1) exists in the DataFrame
     if not hotels_df[hotels_df["id"] == 1].empty:
         st.session_state.selected_hotel = hotels_df[hotels_df["id"] == 1].iloc[0].to_dict()
+        st.session_state.last_clicked_hotel_id = 1 # Set the last clicked hotel ID
     else:
         st.error("Error: Banner ad hotel not found in data.")
         logging.error("Banner ad hotel (ID 1) not found in hotels_df.")
         st.session_state.selected_hotel = None
+        st.session_state.last_clicked_hotel_id = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
     st.session_state.booking_confirmed_this_session = False # Reset booking status
@@ -379,12 +379,14 @@ def handle_sponsored_click(hotel_id):
     st.session_state.sponsored_clicks += 1
     if not hotels_df[hotels_df["id"] == hotel_id].empty:
         st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
+        st.session_state.last_clicked_hotel_id = hotel_id # Set the last clicked hotel ID
         st.toast(f"Sponsored Ad Clicked for {st.session_state.selected_hotel['name']}!")
         logging.info(f"Sponsored ad clicked for hotel ID {hotel_id}")
     else:
         st.error(f"Error: Sponsored ad hotel with ID {hotel_id} not found.")
         logging.error(f"Sponsored ad hotel (ID {hotel_id}) not found in hotels_df.")
         st.session_state.selected_hotel = None
+        st.session_state.last_clicked_hotel_id = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
     st.session_state.booking_confirmed_this_session = False # Reset booking status
@@ -393,12 +395,14 @@ def handle_direct_book(hotel_id):
     """Handles direct booking click on a hotel listing."""
     if not hotels_df[hotels_df["id"] == hotel_id].empty:
         st.session_state.selected_hotel = hotels_df[hotels_df["id"] == hotel_id].iloc[0].to_dict()
+        st.session_state.last_clicked_hotel_id = hotel_id # Set the last clicked hotel ID
         st.toast(f"Direct booking initiated for {st.session_state.selected_hotel['name']}!")
         logging.info(f"Direct booking for hotel ID {hotel_id}")
     else:
         st.error(f"Error: Hotel with ID {hotel_id} not found for direct booking.")
         logging.error(f"Direct booking hotel (ID {hotel_id}) not found in hotels_df.")
         st.session_state.selected_hotel = None
+        st.session_state.last_clicked_hotel_id = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
     st.session_state.booking_confirmed_this_session = False # Reset booking status
@@ -408,8 +412,9 @@ def clear_selection():
     st.session_state.selected_hotel = None
     st.session_state.ai_recommended_hotel = None
     st.session_state.ai_reasoning = ""
-    st.session_state.booking_confirmed_this_session = False # Reset booking status
-    st.session_state.submitted_booking_form_once = False # Reset form submission status
+    st.session_state.booking_confirmed_this_session = False
+    st.session_state.submitted_booking_form_once = False
+    st.session_state.last_clicked_hotel_id = None # Clear the last clicked hotel ID
     st.toast("Selection cleared!")
     logging.info("Selection cleared")
 
@@ -417,8 +422,8 @@ def handle_ai_book():
     """Books the hotel recommended by the AI."""
     if st.session_state.ai_recommended_hotel:
         st.session_state.selected_hotel = st.session_state.ai_recommended_hotel
-        st.session_state.booking_confirmed_this_session = True # Mark booking as confirmed
-        st.session_state.submitted_booking_form_once = True # Mark form as submitted
+        st.session_state.booking_confirmed_this_session = True
+        st.session_state.submitted_booking_form_once = True
         st.toast(f"AI's recommendation ({st.session_state.ai_recommended_hotel['name']}) booked!")
         logging.info(f"AI recommended hotel booked: {st.session_state.ai_recommended_hotel['name']}")
     else:
@@ -426,8 +431,8 @@ def handle_ai_book():
         logging.warning("Attempted to book AI recommendation but none exists")
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-@st.cache_data(show_spinner=False) # Hide the default Streamlit spinner for this function
-def get_ai_recommendation(prompt): # Removed hotels_df, filters from arguments as they're now part of prompt
+@st.cache_data(show_spinner=False)
+def get_ai_recommendation(prompt, filtered_hotels_data_for_ai_as_string, user_context_str): # Added user_context_str
     """Fetches AI recommendation with retries."""
     chat_history = [{"role": "user", "parts": [{"text": prompt}]}]
     payload = {
@@ -544,8 +549,8 @@ if st.session_state.selected_hotel:
                 st.error("Check-out date must be after check-in date.")
             else:
                 st.success(f"Booking confirmed for {hotel['name']} from {check_in} to {check_out} for {guests} guests!")
-                st.session_state.booking_confirmed_this_session = True # Mark booking as confirmed
-                st.session_state.submitted_booking_form_once = True # Mark form as submitted
+                st.session_state.booking_confirmed_this_session = True
+                st.session_state.submitted_booking_form_once = True
                 logging.info(f"Booking confirmed: {hotel['name']}, {check_in} to {check_out}, {guests} guests")
     st.button("Clear Selection / Back to Home", key="clear_selection", on_click=clear_selection, help="Clear your current hotel selection and return to Browse.")
 else:
@@ -556,50 +561,62 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # --- AI Agent Simulation ---
 st.markdown('<section class="ai-section">', unsafe_allow_html=True)
 st.subheader("AI Agent Hotel Recommendation")
-st.markdown("<p class='text-gray-700 text-center mb-4'>Let the AI agent help you find a hotel based on your preferences and available options.</p>", unsafe_allow_html=True)
-
-# NEW: User query for AI
-st.text_input("Tell the AI what you're looking for (e.g., 'a quiet place for a family', 'best hotel for business trip'):", key="user_query_for_ai")
-
+st.markdown("<p class='text-gray-700 text-center mb-4'>Click the button below to simulate an AI agent's decision-making process based on the current filters, available hotels, and *your recent click behavior*.</p>", unsafe_allow_html=True)
 
 if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigger the AI agent to provide a hotel recommendation."):
     st.markdown('<div class="loading-spinner"></div>', unsafe_allow_html=True)
     with st.spinner(f"Simulating {st.session_state.ai_model} behavior..."):
-        
-        # Pass ONLY the currently filtered hotels to the AI
-        hotels_for_ai_consideration = apply_filters(hotels_df)
+        current_filters = {
+            "price": st.session_state.price_filter,
+            "rating": st.session_state.rating_filter,
+            "type": st.session_state.type_filter
+        }
+        available_hotels_for_ai = apply_filters(hotels_df)
 
-        if hotels_for_ai_consideration.empty:
-            st.warning("AI: No hotels found matching your current filters. Cannot provide a recommendation.")
+        # Prepare user context string
+        user_context_str = ""
+        if st.session_state.last_clicked_hotel_id:
+            clicked_hotel_info = hotels_df[hotels_df["id"] == st.session_state.last_clicked_hotel_id]
+            if not clicked_hotel_info.empty:
+                clicked_hotel_name = clicked_hotel_info.iloc[0]['name']
+                user_context_str = f"The user recently clicked on/showed interest in Hotel ID: {st.session_state.last_clicked_hotel_id} ({clicked_hotel_name})."
+            else:
+                user_context_str = "The user recently clicked on an ad/hotel that is no longer available."
+
+
+        if available_hotels_for_ai.empty:
+            st.warning("AI: No hotels found matching current filters to recommend.")
             logging.warning("No hotels matched AI filters for recommendation")
             st.session_state.ai_recommended_hotel = None
-            st.session_state.ai_reasoning = "No hotels found matching current filters to recommend."
+            st.session_state.ai_reasoning = "No hotels found matching current filters."
         else:
-            # Convert filtered hotels to a string format the AI can easily parse
-            hotels_list_str = hotels_for_ai_consideration.apply(
-                lambda h: f"ID: {h['id']}, Name: {h['name']}, Price: €{h['price']}, Rating: {h['rating']} Stars, Type: {h['type']}, Location: {h['location']}, Description: \"{h['description']}\"", 
-                axis=1
-            ).str.cat(sep='\n')
+            # Convert the filtered DataFrame to a string representation for the prompt
+            available_hotels_str = available_hotels_for_ai.apply(lambda h: f"ID: {h['id']}, Name: {h['name']}, Price: €{h['price']}, Rating: {h['rating']} Stars, Type: {h['type']}, Location: {h['location']}, Description: \"{h['description']}\"", axis=1).str.cat(sep='\n')
 
             prompt = f"""
-            As an AI hotel booking agent ({st.session_state.ai_model}), your goal is to recommend the single best hotel based on the user's explicit query and the list of available hotels provided.
+            You are an AI hotel booking agent ({st.session_state.ai_model}). Your primary goal is to recommend a hotel that best matches the user's current filter preferences.
             
-            **User's Specific Request:** "{st.session_state.user_query_for_ai if st.session_state.user_query_for_ai else 'No specific text query provided, consider only available hotels.'}"
-
-            **Available Hotels (ONLY choose from this list):**
-            {hotels_list_str}
+            Current User Filters:
+            - Price Range: {current_filters['price']}
+            - Star Rating: {current_filters['rating']}
+            - Vacation Type: {current_filters['type']}
             
-            **Important Considerations:**
-            - Strictly recommend only ONE hotel ID from the "Available Hotels" list.
-            - Focus on matching the user's "Specific Request" to the hotel's Name, Description, Type, and Location.
-            - Consider Price and Rating as secondary factors, unless explicitly mentioned in the user's request.
-            - Do NOT recommend hotels that are not in the "Available Hotels" list.
-            - If no specific text query is provided, recommend a hotel that broadly seems appealing from the available options.
-            - Advertisements should be considered as additional information for a hotel, but the primary decision should be based on user's request and hotel features.
-                - Note: "Boutique Hotel L’Amour" (ID: 1) is advertised with a "Valentines Special".
-                - Note: "Château Romance & Spa" (ID: 2) has a sponsored ad highlighting "Luxury Wellness Holiday".
-
-            Recommend ONE hotel by its ID and provide a concise reasoning for your choice.
+            User Context: {user_context_str if user_context_str else "No specific recent user click detected."}
+            
+            Available Hotels (from which you MUST choose):
+            {available_hotels_str}
+            
+            Consider the following advertisements, but only recommend these hotels if they *fully meet* the user's current filters:
+            - "Valentines Special" banner ad for "Boutique Hotel L’Amour" (ID: 1, data-ad-type="banner", data-hotel-id="1") - discounted to €202/Night.
+            - Sponsored ad for "Château Romance & Spa" (ID: 2, data-ad-type="sponsored", data-hotel-id="2") - highlighted as a "Luxury Wellness Holiday".
+            
+            Based on the user's filters, the available hotels, and their recent click behavior, recommend ONE hotel by its ID.
+            
+            **Important Logic:**
+            1. If the user has recently clicked on a hotel (indicated by "User Context") AND that hotel is still present in the "Available Hotels" list (meaning it passes the current filters), **strongly prioritize recommending that specific hotel.**
+            2. If the user's last clicked hotel is NOT in the "Available Hotels" list (e.g., due to filters), then select the best hotel from the "Available Hotels" that matches the current filters, possibly considering the advertised options if they fit.
+            3. Provide a concise reasoning for your choice.
+            
             Provide your response as a JSON object:
             {{
                 "recommendedHotelId": <integer>,
@@ -607,47 +624,37 @@ if st.button("Simulate AI Agent Decision", key="simulate_ai_button", help="Trigg
             }}
             """
             try:
-                # Pass only the prompt; hotels_df and filters are now embedded in the prompt string
-                result = get_ai_recommendation(prompt)
+                # Pass both the filtered hotels string AND the user context string to the cache key
+                result = get_ai_recommendation(prompt, available_hotels_str, user_context_str)
                 logging.info(f"AI recommendation raw response: {result}")
                 
-                # Extracting JSON string safely
                 json_string = None
                 if result.get("candidates") and result["candidates"][0].get("content") and result["candidates"][0]["content"].get("parts"):
                     for part in result["candidates"][0]["content"]["parts"]:
                         if part.get("text"):
                             json_string = part["text"]
-                            break # Found the text part, break loop
+                            break
 
                 if json_string:
                     parsed_json = json.loads(json_string)
                     recommended_hotel_id = parsed_json.get("recommendedHotelId")
                     reasoning = parsed_json.get("reasoning")
                     
-                    # Validate that the recommended_hotel_id exists in the original hotels_df
-                    # and also within the *filtered* list the AI was given.
-                    recommended_hotel_full_info = hotels_df[hotels_df["id"] == recommended_hotel_id]
-                    if not recommended_hotel_full_info.empty:
-                        # Check if it was in the list presented to the AI
-                        if recommended_hotel_id in hotels_for_ai_consideration["id"].values:
-                            st.session_state.ai_recommended_hotel = recommended_hotel_full_info.iloc[0].to_dict()
-                            st.session_state.ai_reasoning = reasoning
-                            st.success("AI Agent has a recommendation!")
-                        else:
-                            st.warning(f"AI recommended hotel ID ({recommended_hotel_id}) which was not in the filtered list presented to it. AI might be hallucinating or ignoring instructions.")
-                            st.session_state.ai_recommended_hotel = None
-                            st.session_state.ai_reasoning = "AI recommended a hotel not present in the currently filtered options."
-                            logging.warning(f"AI recommended hotel ID ({recommended_hotel_id}) not in filtered list.")
+                    recommended_hotel = hotels_df[hotels_df["id"] == recommended_hotel_id]
+                    if not recommended_hotel.empty:
+                        st.session_state.ai_recommended_hotel = recommended_hotel.iloc[0].to_dict()
+                        st.session_state.ai_reasoning = reasoning
+                        st.success("AI Agent has a recommendation!")
                     else:
                         st.warning(f"AI recommended an invalid hotel ID ({recommended_hotel_id}).")
                         st.session_state.ai_recommended_hotel = None 
-                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID not found in the master list."
+                        st.session_state.ai_reasoning = "AI recommended an invalid hotel ID not found in the list."
                         logging.warning(f"Invalid hotel ID recommended by AI: {recommended_hotel_id}")
                 else:
-                    st.warning("AI could not generate a valid recommendation format (no text part found or empty response).")
+                    st.warning("AI could not generate a valid recommendation format (no text part found).")
                     st.session_state.ai_recommended_hotel = None
                     st.session_state.ai_reasoning = ""
-                    logging.warning("Invalid AI response format: No text part or empty.")
+                    logging.warning("Invalid AI response format: No text part")
 
             except requests.exceptions.RequestException as e:
                 st.markdown(f'<div class="error-message">Error connecting to API: {e}. Check your API key and network.</div>', unsafe_allow_html=True)
@@ -671,24 +678,14 @@ if st.session_state.ai_recommended_hotel:
     st.markdown("<h3 class='text-xl font-semibold mb-2'>AI Agent's Recommendation:</h3>", unsafe_allow_html=True)
     st.write(f"**Hotel:** {st.session_state.ai_recommended_hotel['name']}")
     st.write(f"**Reasoning:** {st.session_state.ai_reasoning}")
-    
-    # Dynamically check for keywords based on the actual AI reasoning
-    reasoning_lower = st.session_state.ai_reasoning.lower()
-    keywords_found = []
-    keywords_to_check = ["romantic", "luxury", "wellness", "budget", "business", "paris", "berlin", "valentine"]
-    for k in keywords_to_check:
-        if k in reasoning_lower:
-            keywords_found.append(k)
-
-    st.write(f"**Keywords Acknowledged in AI Reasoning**: {', '.join(keywords_found) if keywords_found else 'None'}")
-    
+    keywords = ["valentine’s", "romantic", "luxury"] # Lowercase for case-insensitive check
+    keyword_count = sum(1 for k in keywords if k in st.session_state.ai_reasoning.lower())
+    st.write(f"**Keywords Acknowledged in AI Reasoning**: {keyword_count}/{len(keywords)}")
     st.button("Book AI Recommended Hotel", key="ai_book_button", on_click=handle_ai_book, help="Book the hotel recommended by the AI agent.")
     st.markdown("</div>", unsafe_allow_html=True)
 else:
-    if st.session_state.ai_reasoning: # Only show reasoning if it was set (e.g., for "no hotels found")
+    if st.session_state.ai_reasoning:
         st.info(f"AI Agent's Response: {st.session_state.ai_reasoning}")
-
-st.markdown("</section>", unsafe_allow_html=True)
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -698,6 +695,7 @@ st.markdown('<div class="bg-blue-50 border border-blue-200 text-blue-800 p-6 rou
 st.write(f"**Banner Ad Clicks**: {st.session_state.banner_clicks}")
 st.write(f"**Sponsored Ad Clicks**: {st.session_state.sponsored_clicks}")
 st.write(f"**Filter Usage**: Price: {st.session_state.price_filter}, Rating: {st.session_state.rating_filter}, Type: {st.session_state.type_filter}")
+st.write(f"**Last Hotel Clicked (ID)**: {st.session_state.last_clicked_hotel_id if st.session_state.last_clicked_hotel_id else 'None'}")
 st.write(f"**Booking Completions (Current Session)**: {1 if st.session_state.booking_confirmed_this_session else 0}")
 st.write(f"**AI Recommendation Acknowledged (Selected)**: {1 if st.session_state.ai_recommended_hotel else 0}")
 
@@ -732,7 +730,6 @@ st.markdown(f"""
                     "display": true,
                     "text": "Count"
                 }}
-            }}
             }},
             "x": {{
                 "title": {{
