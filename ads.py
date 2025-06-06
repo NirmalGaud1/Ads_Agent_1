@@ -48,7 +48,6 @@ initialize_session_state()
 
 # --- Load CSS ---
 def load_css():
-    # Removed 'f' from the start of this triple-quoted string
     css = """
     body {
         font-family: 'Inter', sans-serif;
@@ -720,6 +719,3 @@ st.markdown(f"""
         }}
     }}
 }}
-""", unsafe_allow_html=True)
-st.markdown("&lt;/div>", unsafe_allow_html=True)
-st.markdown("&lt;/div>", unsafe_allow_html=True)
